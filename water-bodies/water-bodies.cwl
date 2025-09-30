@@ -8,7 +8,7 @@ $graph:
   - class: Workflow
     id: water_bodies
     label: Water bodies detection based on NDWI and otsu threshold
-    doc: Water bodies detection based on NDWI and otsu threshold
+    doc: Water bodies detection based on NDWI and otsu threshold and generate a STAC catalog for the outputs
     requirements:
       - class: ScatterFeatureRequirement
       - class: SubworkflowFeatureRequirement
