@@ -1,0 +1,43 @@
+{
+    "id": "water-bodies",
+    "type": "Feature",
+    "geometry": null,
+    "properties": {
+        "title": "water-bodies",
+        "created": "2025-10-06T14:54:32Z",
+        "osc:project": "ospd",
+        "description": "This workflow accepts a GeoTIF file and determines areas of water in the data based on NDWI (Normalised Difference Water Index) and the Otsu Threshold. The workflow is defined as an OGC Application Package using Common Workflow Language (CWL) so the executing platform will need to support CWL execution. It generates a STAC Catalog as output, linking to the individual STAC items generated during the workflow execution.",
+        "keywords": [
+            "water",
+            "NDWI",
+            "water bodies",
+            "otsu",
+            "eoepca"
+        ],
+        "contacts": [
+            {
+                "name": "Tom Jellicoe",
+                "positionName": "Software Developer",
+                "organization": "Telespazio UK",
+                "emails": [
+                    {
+                        "value": "thomas.jellicoe@telespazio.com"
+                    }
+                ]
+            }
+        ]
+    },
+    "links": [
+        {
+            "href": "https://github.com/tjellicoe-tpzuk/eo-workflow-examples/blob/main/water-bodies/water-bodies.cwl",
+            "title": "OGC Application Package",
+            "rel": "application",
+            "type": "application/cwl+yaml"
+        },
+        {
+            "href": "https://github.com/Terradue/ogc-eo-application-package-hands-on/tree/master/water-bodies",
+            "rel": "git",
+            "title": "Source Code"
+        }
+    ]
+}
