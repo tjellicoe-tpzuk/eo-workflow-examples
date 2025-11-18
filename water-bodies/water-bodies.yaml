@@ -1,0 +1,158 @@
+# An attempt at converting the CWL workflow to an Argo Workflows 
+# manifest to alow deployment and execution using Argo Workflow-based platforms,
+# such as EOxHub
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: artifact-passing-subpath-
+spec:
+  entrypoint: artifact-example
+  arguments:
+    parameters:
+    - name: cwl_location
+      value: https://raw.githubusercontent.com/tjellicoe-tpzuk/eo-workflow-examples/refs/heads/main/water-bodies/water-bodies.cwl
+    - name: inputs_location
+      value: https://raw.githubusercontent.com/tjellicoe-tpzuk/eo-workflow-examples/refs/heads/main/water-bodies/water-bodies_inputs.json
+    # - name: stac_items
+    #   value: '["https://earth-search.aws.element84.com/v0/collections/sentinel-s2-l2a-cogs/items/S2B_10TFK_20210713_0_L2A", "https://earth-search.aws.element84.com/v0/collections/sentinel-s2-l2a-cogs/items/S2A_10TFK_20220524_0_L2A"]'
+    # - name: aoi
+    #   value: -121.399,39.834,-120.74,40.472
+    # - name: espg
+    #   value: "EPSG:4326"
+    # - name: bands
+    #   value: '["green", "nir"]'
+  templates:
+  - name: artifact-example
+    steps:
+    - - name: load-cwl-artifact
+        template: load-cwl-to-file
+        arguments:
+          parameters:
+          - name: cwl_location
+            value: "{{workflow.parameters.cwl_location}}"
+    - - name: load-inputs-artifact
+        template: load-inputs-to-file
+        arguments:
+          parameters:
+          - name: inputs_location
+            value: "{{workflow.parameters.inputs_location}}"
+    # - - name: gen-workflow-cmd
+    #     template: gen-workflow-cmd
+    #     arguments:
+    #       parameters:
+    #       - name: stac_items
+    #         value: "{{workflow.parameters.stac_items}}"
+    #       - name: aoi
+    #         value: "{{workflow.parameters.aoi}}"
+    #       - name: espg
+    #         value: "{{workflow.parameters.espg}}"
+    #       - name: bands
+    #         value: "{{workflow.parameters.bands}}"
+    - - name: run-cwl
+        template: run-cwl-workflow
+        arguments:
+          artifacts:
+          - name: workflow
+            from: "{{steps.load-cwl-artifact.outputs.artifacts.workflow}}"
+          # - name: cmd
+          #   from: "{{steps.gen-workflow-cmd.outputs.artifacts.workflow-command}}"
+          - name: inputs
+            from: "{{steps.load-inputs-artifact.outputs.artifacts.inputs}}"
+
+  - name: load-cwl-to-file
+    inputs:
+      parameters:
+        - name: cwl_location
+    container:
+      image: busybox
+      command: [sh, -c]
+      args: ["mkdir /workflows && wget -O /workflows/my-workflow.cwl {{inputs.parameters.cwl_location}}"]
+    outputs:
+      artifacts:
+      - name: workflow
+        path: /workflows/my-workflow.cwl
+        archive:
+          none: {}
+
+  - name: load-inputs-to-file
+    inputs:
+      parameters:
+        - name: inputs_location
+    container:
+      image: busybox
+      command: [sh, -c]
+      args: ["mkdir /workflows && wget -O /workflows/my-inputs.json {{inputs.parameters.inputs_location}}"]
+    outputs:
+      artifacts:
+      - name: inputs
+        path: /workflows/my-inputs.json
+        archive:
+          none: {}
+
+  - name: gen-workflow-cmd
+    inputs:
+      parameters:
+        - name: stac_items
+        - name: aoi
+        - name: espg
+        - name: bands
+    outputs:
+      artifacts:
+      - name: workflow-command
+        path: /tmp/cwl-command.sh
+        archive:
+          none: {}
+    container:
+      image: python:3.9-alpine
+      command: [sh, -c]
+      args:
+        - |
+          python -c '
+          import json
+          
+          # Parse the JSON arrays
+          bands = json.loads("""{{inputs.parameters.bands}}""")
+          stac_items = json.loads("""{{inputs.parameters.stac_items}}""")
+                    
+          # Build CWL command
+          cmd_parts = [
+              "cwltool /workflows/my-workflow.cwl#water_bodies",
+              "--aoi=\"{{inputs.parameters.aoi}}\"",
+              "--epsg=\"{{inputs.parameters.espg}}\""
+          ]
+          
+          for band in bands:
+              cmd_parts.append(f"--bands=\"{band}\"")
+          
+          for item in stac_items:
+              cmd_parts.append(f"--stac_items=\"{item}\"")
+          
+          print(" ".join(cmd_parts))
+          ' > /tmp/cwl-command.sh
+          
+          cat /tmp/cwl-command.sh
+
+  - name: run-cwl-workflow
+    inputs:
+      artifacts:
+      - name: workflow
+        path: /workflows/my-workflow.cwl
+        archive:
+          none: {}
+      # - name: cmd
+      #   path: /tmp/cwl-command.sh
+      #   archive:
+      #     none: {}
+      - name: inputs
+        path: /workflows/my-inputs.json
+        archive:
+          none: {}
+    container:
+      image: commonworkflowlanguage/cwlviewer:cwltool
+      command: [sh, -c]
+      args: ["cwltool /workflows/my-workflow.cwl#water_bodies /workflows/my-inputs.json"]
+        # - |
+        #   echo "=== CWL Command ==="
+        #   cat /tmp/cwl-command.sh
+        #   echo "=== Running CWL ==="
+        #   bash /tmp/cwl-command.sh
