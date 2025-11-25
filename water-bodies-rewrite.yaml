@@ -1,0 +1,267 @@
+# This example demonstrates the ability to pass artifacts
+# from one step to the next and filtering for a subdirectory
+# key.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: artifact-passing-subpath-
+spec:
+  entrypoint: water-bodies
+  arguments:
+    parameters:
+    - name: aoi
+      value: "-121.399,39.834,-120.74,40.472"
+    - name: epsg
+      value: "EPSG:4326"
+    - name: bands
+      value: "green,nir"
+    - name: stac_items
+      value: "https://earth-search.aws.element84.com/v0/collections/sentinel-s2-l2a-cogs/items/S2B_10TFK_20210713_0_L2A,https://earth-search.aws.element84.com/v0/collections/sentinel-s2-l2a-cogs/items/S2A_10TFK_20220524_0_L2A"
+
+  templates:
+  - name: water-bodies
+    inputs:
+        parameters:
+          - name: aoi
+          - name: epsg
+          - name: bands
+          - name: stac_items
+    steps:
+      - - name: prepare-items
+          template: split-arrays
+          arguments:
+            parameters:
+            - name: list
+              value: "{{inputs.parameters.stac_items}}"
+      - - name: prepare-bands
+          template: split-arrays
+          arguments:
+            parameters:
+            - name: list
+              value: "{{inputs.parameters.bands}}"
+      - - name: compute-water-bodies
+          template: detect-water-body
+          arguments:
+            parameters:
+            - name: aoi
+              value: "{{inputs.parameters.aoi}}"
+            - name: epsg
+              value: "{{inputs.parameters.epsg}}"
+            - name: bands
+              value: "{{steps.prepare-bands.outputs.result}}"
+            - name: item
+              value: "{{item}}"
+          withParam: "{{steps.prepare-items.outputs.result}}"
+      - - name: generate-stac
+          template: stac
+          arguments:
+            parameters:
+            - name: items
+              value: "{{steps.prepare-items.outputs.result}}"
+    
+  - name: detect-water-body
+    inputs:
+      parameters:
+        - name: item
+        - name: aoi
+        - name: epsg
+        - name: bands
+    outputs:
+      artifacts:
+      - name: binary_mask_item
+        from: "{{steps.otsu-step.outputs.artifacts.binary_mask_item}}"
+    steps:
+      - - name: crop-step
+          template: crop
+          arguments:
+            parameters:
+            - name: item
+              value: "{{inputs.parameters.item}}"
+            - name: aoi
+              value: "{{inputs.parameters.aoi}}"
+            - name: epsg
+              value: "{{inputs.parameters.epsg}}"
+            - name: band
+              value: "{{item}}"
+          withParam: "{{inputs.parameters.bands}}"
+      - - name: norm-diff-step
+          template: norm-diff
+          arguments:
+            parameters:
+            - name: item
+              value: "{{inputs.parameters.item}}"
+          #   artifacts:
+          #   - name: rasters
+          #     from: "{{steps.crop-step}}"
+      - - name: otsu-step
+          template: otsu
+          arguments:
+            parameters:
+            - name: item
+              value: "{{inputs.parameters.item}}"
+            artifacts:
+            - name: raster
+              from: "{{steps.norm-diff-step.outputs.artifacts.ndwi}}"
+
+  - name: split-arrays
+    inputs:
+      parameters:
+      - name: list
+    script:
+      image: python:3.9-alpine
+      command: [python]
+      source: |
+        import json
+        items = "{{inputs.parameters.list}}".split(',')
+        print(json.dumps(items))
+
+  - name: crop
+    inputs:
+      parameters:
+        - name: item
+        - name: aoi
+        - name: epsg
+        - name: band
+    container:
+      image: ghcr.io/terradue/ogc-eo-application-package-hands-on/crop:1.5.0
+      command: [sh, -c]
+      args: 
+        - |
+          echo "Cropping item {{inputs.parameters.item}} with band {{inputs.parameters.band}}"
+          mkdir -p /outputs
+          cd /outputs
+          python /app/app.py --input-item "{{inputs.parameters.item}}" --aoi="{{inputs.parameters.aoi}}" --epsg "{{inputs.parameters.epsg}}" --band "{{inputs.parameters.band}}"
+          ITEM_NAME=$(echo "{{inputs.parameters.item}}" | awk -F'/' '{print $NF}')
+          mkdir -p "${ITEM_NAME}"
+          mv *.tif "${ITEM_NAME}/"
+          echo Saving in S3 to "${ITEM_NAME}/"
+    outputs:
+      artifacts:
+      - name: cropped
+        path: /outputs/
+        s3:
+          key: "{{workflow.name}}/"
+        archive:
+          none: {}
+
+  # - name: collect-artifacts
+  #   inputs:
+  #     artifacts:
+  #     - name: input-artifacts
+  #       path: /tmp/artifacts
+  #   outputs:
+  #     artifacts:
+  #     - name: collected
+  #       path: /tmp/artifacts
+  #       archive:
+  #         none: {}
+  #   container:
+  #     image: busybox
+  #     command: [sh, -c]
+  #     args: ["ls -la /tmp/artifacts"]
+
+  - name: norm-diff
+    inputs:
+      parameters:
+        - name: item
+      artifacts:
+        - name: rasters
+          path: /inputs/rasters
+          s3:
+            key: "{{workflow.name}}"
+    outputs:
+      artifacts:
+      - name: ndwi
+        path: /outputs/
+        archive:
+          none: {}
+    container:
+      image: ghcr.io/terradue/ogc-eo-application-package-hands-on/norm_diff:1.5.0
+      command: [bash, -c]
+      args:
+        - |
+          mkdir -p /outputs
+          cd /outputs
+          ITEM_NAME=$(echo "{{inputs.parameters.item}}" | awk -F'/' '{print $NF}')
+          # Find exactly 2 raster files
+          RASTER_FILES=($(find /inputs/rasters/"${ITEM_NAME}" -name "*.tif" | head -n 2))
+          python /app/app.py "${RASTER_FILES[0]}" "${RASTER_FILES[1]}"
+
+  - name: otsu
+    inputs:
+      parameters:
+        - name: item
+      artifacts:
+      - name: raster
+        path: /inputs/rasters
+        archive:
+          none: {}
+    outputs:
+      artifacts:
+      - name: binary_mask_item
+        path: /outputs/
+        s3:
+          key: "{{workflow.name}}/outputs/"
+        archive:
+          none: {}
+    container:
+      image: ghcr.io/terradue/ogc-eo-application-package-hands-on/otsu:1.5.0
+      command: [sh, -c]
+      args:
+        - |
+          mkdir -p /outputs
+          cd /outputs
+          RASTER_FILE=$(find /inputs/rasters -name "*.tif" | head -n 1)
+          python /app/app.py "$RASTER_FILE"
+          ITEM_NAME=$(echo "{{inputs.parameters.item}}" | awk -F'/' '{print $NF}')
+          mkdir -p "${ITEM_NAME}"
+          mv *.tif "${ITEM_NAME}/"
+          echo Saving in S3 to "${ITEM_NAME}/"
+
+  - name: stac
+    inputs:
+      parameters:
+      - name: items
+        archive:
+          none: {}
+      artifacts:
+      - name: rasters
+        path: /inputs/rasters
+        s3:
+          key: "{{workflow.name}}/outputs/"
+        archive:
+          none: {}
+    outputs:
+      artifacts:
+      - name: stac_catalog
+        path: /outputs/
+        archive:
+          none: {}
+    container:
+      image: ghcr.io/terradue/ogc-eo-application-package-hands-on/stac:1.5.0
+      command: [sh, -c]
+      args:
+        - |
+          mkdir -p /outputs
+          cd /outputs
+
+          echo "Generating STAC catalog for items: {{inputs.parameters.items}}"
+          
+          echo "Found files in /inputs/rasters:"
+          ls -la /inputs/rasters
+
+
+      # # Build --input-item arguments from comma-separated string
+      # ITEM_ARGS=""
+      # IFS=',' read -ra ITEMS <<< "{{inputs.parameters.items}}"
+      # for item in "${ITEMS[@]}"; do
+      #   ITEM_ARGS="$ITEM_ARGS --input-item $item"
+      # done
+      
+      # # Build --water-body arguments from raster files
+      # RASTER_ARGS=""
+      # for raster in /inputs/rasters/*.tif; do
+      #   RASTER_ARGS="$RASTER_ARGS --water-body $raster"
+      # done
+      # echo "Running STAC generation with items: $ITEM_ARGS and rasters: $RASTER_ARGS"
+      # python /app/app.py $ITEM_ARGS $RASTER_ARGS
