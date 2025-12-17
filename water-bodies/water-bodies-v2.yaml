@@ -6,6 +6,7 @@ kind: Workflow
 metadata:
   generateName: artifact-passing-subpath-
 spec:
+  # serviceAccountName: deside # may be required on some platforms
   entrypoint: water-bodies
   arguments:
     parameters:
